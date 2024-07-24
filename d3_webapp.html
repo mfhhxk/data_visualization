@@ -1,0 +1,600 @@
+<!--Reference: https://www.developer.com/design/creating-a-tree-diagram-with-d3-js/ -->
+<!--Reference: https://observablehq.com/@triptych/import-javascript-class-from-github-gist -->
+<!--Reference: https://colorbrewer2.org/ -->
+<!--Reference: https://github.com/yingyangvis -->
+
+<!DOCTYPE html>
+
+<head>
+  <meta charset="utf-8">
+  <style>
+    #content {
+      border: 2px solid;
+      width: 1450px;
+      height: 800px;
+      text-align: center;
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      margin: auto;
+    }
+
+    #side-bar {
+      float: left;
+      vertical-align: top;
+      background-color: lightgrey;
+      box-sizing: border-box;
+      width: 300px;
+      height: 800px;
+      padding: 30px 30px 40px 30px;
+      text-align: left;
+      font-size: medium;
+      font-family: sans-serif;
+    }
+
+    #data-source {
+      position: absolute;
+      bottom: 0px;
+      padding: 10px;
+      margin-right: 0px;
+      border-top: 2px dotted grey;
+      max-width: 220px;
+      overflow-wrap: break-word;
+      font-size: small;
+    }
+
+    #canvas {
+      margin-left: 300px;
+      margin-top: 40px;
+    }
+
+    .legend-title {
+      font: 10px sans-serif;
+      font-weight: bold;
+    }
+
+    .legend-label {
+      font: 10px sans-serif;
+    }
+
+    .link {
+      fill: none;
+      stroke: #cccccc;
+      stroke-width: 1px;
+    }
+
+    .leaf_node {
+      stroke-width: 1px;
+      stroke: grey;
+      fill: #7CDEDC;
+    }
+
+    .internal_node {
+      stroke-width: 1px;
+      fill: #1A59A0;
+      stroke: red;
+    }
+
+    /*
+    USE this css rule for the node labels that you will add
+    */
+    .label {
+      font: 12px sans-serif;
+      fill: rgb(0, 0, 0);
+      user-select: none;
+      pointer-events: none;
+      text-align: cener;
+    }
+
+    /*
+    USE these two css rules for the tooltip that you will add
+    */
+    #tooltip-container {
+      position: absolute;
+      background-color: rgb(250, 250, 232);
+      padding: 0px 15px 0px 15px;
+      display: none;
+      border: 1px solid #555;
+    }
+
+    #tooltip-text {
+      font: 16px sans-serif;
+      text-align: left;
+    }
+
+    /*
+    USE these four css rules for the highlighting that you will add
+    */
+    .node-highlighted {
+      stroke: darkorange;
+      fill:#FFA500;
+      stroke-width: 3;
+    }
+
+    .timeline-bar-highlighted {
+      stroke-width: 3;
+    }
+
+    .timeline-bar-transparent {
+      stroke-opacity: 0.3;
+      fill-opacity: 0.3;
+    }
+
+    .link-highlighted {
+      stroke: orangered;
+      stroke-width: 2px;
+    }
+  </style>
+</head>
+
+<body>
+
+  <div id="content">
+    <div id="side-bar">
+      <h1>Road Accidents</h1>
+      <p>The tree diagram and connecting timeline presents the number of road accidents in the Australian state of Victoria over five years (2018-2022).
+        Accident count is shown per day of the week, over three speed group categories: 50km/ph and under, 60-90km/ph and 100km/ph and over.     
+      </p><p> The visualisation shows a clear difference in counts per category. Each category reports more accidents on 
+        weekdays versus weekends. 50km/ph and under shows a meaningful increase during weekdays. 
+        Each category shows a slight reduction of accidents in 2020. 
+      </p><p> 
+        Hover over a tree node to connect the tree and see detailed information, or the timeline for acccident counts. 
+      </p>
+      <div id="data-source"> Data Source: <a
+        href="https://discover.data.vic.gov.au/dataset/victoria-road-crash-data">Victoria Road Crash Data, </a> All accidents missing speed zone data or containing codes 777, 888, 999 were not categorised.</div>
+    </div>
+    <div id="canvas">
+    </div>
+
+    <div id="tooltip-container">
+      <p id="tooltip-text">Tooltip text goes here.</p>
+    </div>
+
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    
+
+    <script type="module">
+
+      /*
+      NOTICE: "#region" and "#endregion" provide existing code and variables that will be used in the visualisation. Avoid modifying unless absolutely necessary!
+      */
+
+      //// #region: load external resources
+      // load the legend function (ref:  https://github.com/yingyangvis )
+      const functionURL = "https://gist.githubusercontent.com/yingyangvis/7d10d41d9767e3f21c70cb7a4cb06d31/raw/d4b502f40e9cb6b4926d44002f0ee232f40cd303/colour_legend.js";
+      const response = await fetch(functionURL);
+      const blobObject = new Blob([(await response.text())], { type: "text/javascript" });
+      const legend = (await import(URL.createObjectURL(blobObject))).legend;
+
+      // load the roads hierarchy data
+      const hierarchyDataPath = "https://raw.githubusercontent.com/imdatavis/fit5147/39aca24d3e2e2d054b05945929758f524f7691e3/PE3_roads_hierarchy.json";
+      const treeData = await d3.json(hierarchyDataPath);
+      //// #endregion
+
+      //// #region: define a global variable to store the accident data with global access
+      let accidentDataPointer = null;
+      //// #endregion
+
+      //// #region: define basic variables of the visualisation
+      // set the dimensions and margins of the diagram
+      const margin = { top: 20, right: 50, bottom: 40, left: 50 },
+        width = 1150 - margin.left - margin.right,
+        height = 800 - margin.top - margin.bottom - 60;
+
+      // set the interval and length of the timeline
+      const interval = 50,
+        length = 7 * interval;
+
+      // set the radius of nodes
+      const r = 10;
+
+      // append a svg object to the body of the page
+      const svg = d3.select("#canvas").append("svg")
+        .attr("width", width + margin.left + margin.right)
+        .attr("height", height + margin.top + margin.bottom),
+        // append a group to the svg object to hold all the visualisation elements
+        svgGroup = svg.append("g")
+          .attr("transform", "translate(" + margin.left + "," + margin.top + ")");
+      //// #endregion
+
+      //// #region: define the timeline
+      // create a scale for the timeline
+      const WeekDays = ["", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+      const timelineScale = d3.scalePoint()
+        .domain(WeekDays)
+        .range([0, length]);
+
+      // add the scale to an axis
+      const x_axis = d3.axisBottom()
+        .scale(timelineScale)
+        .tickSizeInner(-height);
+
+      // append a group element to the svg group and insert the axis object
+      svgGroup.append("g")
+        .call(x_axis)
+        .call(customiseAxis)
+        .attr("transform", "translate(" + (width - length + r) + "," + height + ")");
+
+      // customise the axis
+      function customiseAxis(selection) {
+        selection.selectAll(".tick text")
+          .attr("transform", "translate(" + (-interval / 2) + ",0)")
+          .attr("fill", "grey");
+        selection.selectAll(".tick line")
+          .attr("stroke-dasharray", "4,4")
+          .attr("stroke", "#ccc");
+        selection.selectAll(".domain")
+          .attr("stroke", "#ccc");
+      }
+      //// #endregion
+
+      //// #region: process the hierarchy data for visualisation
+      // declare a tree layout and assign the size
+      const treemap = d3.tree()
+        .size([height, width - length]);
+
+      //  assign the data to a hierarchy using parent-child relationships
+      let root = d3.hierarchy(treeData, d => d.children);
+
+      // map the hierarchy data to the tree layout
+      root = treemap(root);
+
+      // add the links between the nodes
+      const link = svgGroup.selectAll(".link")
+        .data(root.descendants().slice(1))
+        .join("path")
+        .attr("class", "link")
+        .attr("d", d =>
+          "M" + d.y + "," + d.x
+          + "C" + (d.y + d.parent.y) / 2 + "," + d.x
+          + " " + (d.y + d.parent.y) / 2 + "," + d.parent.x
+          + " " + d.parent.y + "," + d.parent.x
+        );
+
+      // add each node as a group for the circle and label elements that you will add below
+      const node = svgGroup.selectAll(".node")
+        .data(root.descendants())
+        .join("g")
+        .attr("class", d => d.children ? "internal_node" : "leaf_node")
+        .attr("transform", d => "translate(" + d.y + "," + d.x + ")");
+      //// #endregionit
+
+
+
+      // Add a shape/symbol to the node
+      // NOTE you can add visual variables to the node if needed. You can also use internal_node and leaf_node classes if they make sense in your design.
+      
+      // Task 1
+      const tooltipContainer = d3.select("#tooltip-container");
+      const tooltipText = d3.select("#tooltip-text"); 
+      
+      function showTooltip(text) {
+          tooltipText.html(text);
+          tooltipContainer.style("display", "block")
+            .style("left", (event.pageX + 10) + "px")
+            .style("top", (event.pageY - 28) + "px");
+      }
+
+      function hideTooltip() {
+            tooltipContainer.style("display", "none");
+        }
+      
+      const internalNode = node.filter(d => d.children)
+        .append("circle")
+        .attr("cx", 0)
+        .attr("cy", 0)
+        .attr("r", r)
+
+
+      const leafNodes = node.filter(d => !d.children)
+          .append("circle")
+          .attr("cx", 0)
+          .attr("cy", 0)
+          .attr("r", r)
+
+      
+
+      // Hover and highlighting pointers:
+      // Hover the mouse on the leaf nodes to show the year and total number of accidents of that year and speed zone on the tooltip, 
+      // you can use the css rule of tooltip defined in the style sheet in this file. 
+      // Hover the mouse on the non-leaf nodes to show the number of their children on the tooltip, highlight the node with an outline or fill.  
+      // If the node is a leaf node (year node): keep the timeline bars attached to the node and all nodes that have the 
+      // same value full opaque, and turn other timeline bars transparent (0.1<opacity<0.5).
+      // When node is highlighted, highlight all links attached to the nodes, and their parents to the root, with bigger thickness and a different colour.
+      // If the node is a speed zone node: keep the timeline bars attached to the node's children full opaque, and turn other timeline bars transparent (0.1<opacity<0.5).
+      // Highlight all links between the node and its children, as well as to the root, with bigger thickness and a different colour.
+      // When a node is highlighted, if the node is the root node: do nothing! except highlight with the outline you've already done.
+      // You can use the css rule of highlighting defined in the style sheet in this file
+      
+
+      // add the label to the node
+      
+      // Task 2
+      node.append("text")
+        .attr("class", "label")
+        .attr("x", function(d) { return d.children ? 0 : -5; }) // Adjust position based on whether it's an internal or leaf node
+        .attr("y", function(d) { return d.children ? -30 : -10; }) // Move text above the leaf nodes
+        .style("fill", "black")  
+        .style("stroke", "none") 
+        .style("text-anchor", "middle") // centre-align text
+        .text(function(d) { 
+          if (!d.children) { //not in children
+            return d.data.Year; 
+        } else if (d.data.name === "Speed Zone") { // first node
+            return d.data.name; 
+        } else {
+            return d.data.name + " km/ph"; 
+        }
+    });
+
+
+
+
+      // the path of the accident data
+      const accidentDataPath = "https://raw.githubusercontent.com/imdatavis/fit5147/39aca24d3e2e2d054b05945929758f524f7691e3/PE3_accident_data.csv";
+      let accidentData;
+      // read the accident data from the path
+      d3.csv(accidentDataPath).then(function(accidentData) {
+          accidentData = accidentData.map(d => {
+          const { Row_ID, ...rest } = d;
+          return rest;
+      });
+
+      
+        // keep a reference to the accident data in accidentDataPointer variable
+        accidentDataPointer = accidentData;
+
+        // get the data range of the accident data
+        let minValue = Infinity;
+        let maxValue = -1;
+        accidentData.forEach(function(thisD) {
+            let thisValue = +thisD["AccidentCount"]; // extract as value
+            minValue = Math.min(minValue, thisValue);
+            maxValue = Math.max(maxValue, thisValue);
+        });
+
+
+        // map the data value domain to a scale range
+        let value2range = d3.scaleLinear()
+          .domain([minValue, maxValue])
+          .range([0,1]);
+
+
+        legend({
+          color: d3.scaleSequential([minValue, maxValue], d3.interpolateTurbo),
+          title: "Accident Count",
+          ticks: 10,
+          tickSize: 6,
+          width: 400,
+          height: 52,
+          marginTop: margin.top,
+          marginLeft: margin.left
+        });
+        
+
+
+        // map the value scale to a colour scale using your chosen colour palette
+        const colorScale = d3.scaleSequential()
+          .domain([minValue, maxValue])
+          .interpolator(d3.interpolateTurbo);
+
+      // Extract unique values for SpeedZone, Year, and DayOfWeek
+        const speedZones = Array.from(new Set(accidentData.map(d => d.SpeedZone)));
+        const years = Array.from(new Set(accidentData.map(d => d.Year)));
+        const daysOfWeek = Array.from(new Set(accidentData.map(d => d.DayofWeek)));
+
+        // Create scales
+        const yScale = d3.scaleBand()
+          .domain(speedZones)
+          .range([height, 0])
+          .padding(0.2)
+          .paddingOuter(0.1);
+
+
+        const nestedData = d3.group(accidentData, d => d.SpeedZone, d => d.Year);
+
+        const leafNodePositions = leafNodes.data().map(d => ({
+            x: d.x,
+            y: d.y
+        }));
+        
+        const tooltipContainer = d3.select("#tooltip-container");
+        const tooltipText = d3.select("#tooltip-text");
+
+        // Ref of tooltip; https://d3-graph-gallery.com/graph/interactivity_tooltip.html 
+        // Create bars
+        svg.selectAll(".speedZone-group")
+            // group by speed zone
+          .data(d => Array.from(nestedData.entries()))
+          .enter().append("g")
+          .attr("class", "speedZone-group")
+          .attr("transform", d => `translate(0, ${yScale(d[0])})`)
+
+            // group by year
+          .selectAll(".year-group")
+          .data(d => Array.from(d[1].entries()))
+          .enter().append("g")
+          .attr("class", "year-group")
+          .attr("transform", d => `translate(0, ${ yScale.bandwidth() / (years.length*0.95) * (years.indexOf(d[0])-0.35)})`)
+
+          .selectAll(".bar")
+          .data(d => d[1])
+          .enter().append("rect")
+          .attr("class", "bar")
+          .attr("x", d => timelineScale(d.DayofWeek) + (width - length + r))  // start of the x-axis
+          .attr("y",d => leafNodePositions.find(
+            node => node.index === d.index).x)  // move to leaf node position
+
+          .attr("width", interval)
+          .attr("height", 2*r)
+          .attr("fill", d => colorScale(+d.AccidentCount))
+          .attr("stroke-width", 0) // Set stroke width
+          .attr("stroke", "black") 
+          .attr("opacity", 0.7)
+          .on("mouseover", function(event, d) {
+              const tooltipText = 
+                      `<strong>Speed Zone:</strong> ${d.SpeedZone}<br>` +
+                      `<strong>Year:</strong> ${d.Year}<br>` +
+                      `<strong>Day of Week:</strong> ${d.DayofWeek}<br>` +
+                      `<strong>Accident Count:</strong> ${d.AccidentCount}`
+              showTooltip(tooltipText);
+            })
+            .on("mouseleave", hideTooltip);
+
+          
+          const totalAccidentsByYearAndZone = d3.rollup(accidentData, 
+              v => d3.sum(v, d => +d.AccidentCount), 
+              d => d.SpeedZone,
+              d => d.Year,
+          );
+
+
+        internalNode
+            .on("mouseover", function(event, d) {
+              const year = d.data.Year;
+              const speedZone = d.data.name;
+              const childrenCount = d.children.length;
+              // nodes
+              d3.select(this).classed("node-highlighted", true);
+
+              // tooltip
+              const tooltipText = 
+              `<strong>Number of Child Nodes:</strong> ${childrenCount}`;
+              showTooltip(tooltipText);
+
+                // hightlight bar
+              svg.selectAll(".bar")
+                // when hover-over node = speedzone group of the bar
+                .filter(bar => bar.SpeedZone === speedZone) 
+                .classed("timeline-bar-highlighted", true) 
+                .classed("timeline-bar-transparent", false); 
+              
+                // transparent bar
+              svg.selectAll(".bar")
+                .filter(bar => bar.SpeedZone !== speedZone)
+                .classed("timeline-bar-transparent", true);
+
+                // highlight link
+                const nodelist = svgGroup.selectAll(".link")._groups[0];
+                
+                const filteredLinks = Array.from(nodelist).filter(link => {
+                const linkData = link.__data__;
+                console.log(linkData)
+                return linkData.parent.data.name == speedZone
+                });
+
+                filteredLinks.forEach(link => {
+                d3.select(link).classed("link-highlighted", true);
+              });
+
+
+          })
+
+            .on("mouseleave", function(event, d) {
+                // node
+                d3.select(this).classed("node-highlighted", false);
+                // tooltip
+                hideTooltip();
+                // bar hightlight
+                svg.selectAll(".bar")
+                    .classed("timeline-bar-highlighted", false) 
+                    .classed("timeline-bar-transparent", false); 
+                // link
+                svg.selectAll(".link")
+                  .classed("link-highlighted", false);
+            });
+
+
+
+        leafNodes
+          .on("mouseover", function(event, d) {
+            // console.log(d.parent.data.name);
+              const year = d.data.Year;
+              const speedZone = d.parent.data.name;
+              const totalAccidents = totalAccidentsByYearAndZone.get(speedZone)?.get(year);
+
+              // node highlight
+              d3.select(this).classed("node-highlighted", true);
+
+              // tooltip
+              const tooltipText = 
+                  `<strong>Year:</strong> ${year}<br>` +
+                  `<strong>Total Accidents:</strong> ${totalAccidents}`
+              showTooltip(tooltipText);
+
+              // timeline bar
+              svg.selectAll(".bar")
+                  .filter(bar => bar.Year === year)
+                  .classed("timeline-bar-highlighted", true) 
+                  .classed("timeline-bar-transparent", false); 
+              svg.selectAll(".bar")
+                  .filter(bar => bar.Year !== year)
+                  .classed("timeline-bar-transparent", true);
+
+              // link
+              const nodelist = svgGroup.selectAll(".link")._groups[0];
+
+              // btw speedzone and year node
+              const filteredLinks = Array.from(nodelist).filter(link => {
+                const linkData = link.__data__;
+                if (linkData) {
+                  const yearMatch = linkData.data && linkData.data.Year === year;
+                  return yearMatch ;
+                }
+                return false;
+              });
+
+
+              filteredLinks.forEach(link => {
+                d3.select(link).classed("link-highlighted", true);
+              });
+
+
+              // btw the first node and speedzone
+              nodelist.forEach(link => {
+                const linkData = link.__data__;
+
+                if (linkData.children) {
+                  const speedlink = linkData.children;
+                    if (Array.isArray(speedlink)) {
+                        speedlink.forEach(node => {
+                            if (node.data.Year === year) {
+                                d3.select(link).classed("link-highlighted", true);
+                            }
+                        });
+                    }
+                }
+                  })
+              
+
+            })
+
+            .on("mouseleave", function(event, d) {
+              // nodes
+              d3.select(this).classed("node-highlighted", false);
+              // tooltip
+              hideTooltip();
+
+              // timeline bar
+              svg.selectAll(".bar")
+                  .classed("timeline-bar-highlighted", false) 
+                  .classed("timeline-bar-transparent", false);
+
+              svg.selectAll(".link")
+                  .classed("link-highlighted", false);
+
+              d3.select(this)
+                  .classed("node-highlighted", false)
+            })
+
+
+        })
+
+
+    </script>
+</body>
+
+
+
